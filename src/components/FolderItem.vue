@@ -253,22 +253,7 @@
 <script setup lang="ts">
 import { defineProps, defineEmits, ref, nextTick, computed } from "vue";
 
-interface Note {
-  id: string;
-  title: string;
-  content: string;
-  folderId?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-interface Folder {
-  id: string;
-  name: string;
-  expanded: boolean;
-  notes: Note[];
-  subfolders?: Folder[];
-}
+import type { Note, Folder } from "../typings";
 
 const props = defineProps<{
   folder: Folder;

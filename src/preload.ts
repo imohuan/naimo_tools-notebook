@@ -33,14 +33,31 @@ async function fetchData(url: string): Promise<any> {
   }
 }
 
+// ==================== 目录管理 ====================
+
+/**
+ * 获取笔记应用根目录
+ */
+async function getNotebookRootDir(): Promise<string> {
+  const userDataPath = await (window as any).naimo?.system?.getPath('userData') || './userData';
+  const notebookDir = path.join(userDataPath, 'notebook');
+
+  // 确保目录存在
+  if (!fs.existsSync(notebookDir)) {
+    fs.mkdirSync(notebookDir, { recursive: true });
+  }
+
+  return notebookDir;
+}
+
 // ==================== 图片管理 ====================
 
 /**
- * 获取剪贴板图片目录
+ * 获取图片目录
  */
 async function getClipboardImagesDir(): Promise<string> {
-  const userDataPath = await (window as any).naimo?.system?.getPath('userData') || './userData';
-  const imagesDir = path.join(userDataPath, 'notebook_images');
+  const notebookDir = await getNotebookRootDir();
+  const imagesDir = path.join(notebookDir, 'images');
 
   // 确保目录存在
   if (!fs.existsSync(imagesDir)) {
@@ -101,8 +118,8 @@ async function extractImagePaths(content: string): Promise<string[]> {
 
   while ((match = regex.exec(content)) !== null) {
     const imagePath = match[1];
-    // 只处理本地图片路径（在 notebook_images 目录下的）
-    if (imagePath.includes('notebook_images') || imagePath.startsWith(imagesDir)) {
+    // 只处理本地图片路径（在 images 目录下的或包含 notebook 的）
+    if (imagePath.includes('\\images\\') || imagePath.includes('/images/') || imagePath.includes('notebook') || imagePath.startsWith(imagesDir)) {
       imagePaths.push(imagePath);
     }
   }
@@ -140,8 +157,8 @@ async function hasImages(content: string): Promise<boolean> {
  * 获取笔记存储目录
  */
 async function getNotesStorageDir(): Promise<string> {
-  const userDataPath = await (window as any).naimo?.system?.getPath('userData') || './userData';
-  const notesDir = path.join(userDataPath, 'notebook_files');
+  const notebookDir = await getNotebookRootDir();
+  const notesDir = path.join(notebookDir, 'notes');
 
   // 确保目录存在
   if (!fs.existsSync(notesDir)) {
@@ -152,15 +169,34 @@ async function getNotesStorageDir(): Promise<string> {
 }
 
 /**
- * 保存笔记内容到文件
- * @param noteId 笔记ID
+ * 生成基于时间的笔记文件名
+ */
+function generateNoteFileName(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hour = String(now.getHours()).padStart(2, '0');
+  const minute = String(now.getMinutes()).padStart(2, '0');
+  const second = String(now.getSeconds()).padStart(2, '0');
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+
+  return `${year}-${month}-${day}-${hour}-${minute}-${second}-${ms}.md`;
+}
+
+/**
+ * 创建新笔记文件（生成新的文件名）
+ * @param noteId 笔记ID（已废弃，保留参数以兼容现有代码）
  * @param content 笔记内容
  * @returns 文件路径
  */
 async function saveNoteToFile(noteId: string, content: string): Promise<string> {
+  // noteId 参数保留以兼容现有代码，但不再使用
+  void noteId;
+
   try {
     const notesDir = await getNotesStorageDir();
-    const fileName = `${noteId}.md`;
+    const fileName = generateNoteFileName();
     const filePath = path.join(notesDir, fileName);
 
     fs.writeFileSync(filePath, content, 'utf-8');
@@ -168,6 +204,20 @@ async function saveNoteToFile(noteId: string, content: string): Promise<string> 
     return filePath;
   } catch (error) {
     console.error('保存笔记文件失败:', error);
+    throw error;
+  }
+}
+
+/**
+ * 更新现有笔记文件内容（使用已有的文件路径）
+ * @param filePath 文件路径
+ * @param content 笔记内容
+ */
+function updateNoteFile(filePath: string, content: string): void {
+  try {
+    fs.writeFileSync(filePath, content, 'utf-8');
+  } catch (error) {
+    console.error('更新笔记文件失败:', error);
     throw error;
   }
 }
@@ -228,6 +278,8 @@ const myPluginAPI = {
   getCurrentTime,
   formatText,
   fetchData,
+  // 目录管理 API
+  getNotebookRootDir,
   // 图片相关 API
   saveImageFromBase64,
   extractImagePaths,
@@ -237,6 +289,7 @@ const myPluginAPI = {
   // 笔记文件管理 API
   getNotesStorageDir,
   saveNoteToFile,
+  updateNoteFile,
   loadNoteFromFile,
   deleteNoteFile,
   readLocalTextFile

@@ -106,29 +106,7 @@
 import { defineProps, defineEmits, ref } from "vue";
 import FolderItem from "./FolderItem.vue";
 
-interface Note {
-  id: string;
-  title: string;
-  content: string;
-  folderId?: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-interface Folder {
-  id: string;
-  name: string;
-  expanded: boolean;
-  notes: Note[];
-  subfolders?: Folder[];
-}
-
-interface DragItem {
-  type: "folder" | "note";
-  id: string;
-  name: string;
-  data: any;
-}
+import type { Folder, DragItem } from "../typings";
 
 // Props used in template
 defineProps<{

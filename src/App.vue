@@ -68,22 +68,11 @@ const isSidebarCollapsed = computed(() => {
   return splitPaneRef.value?.isCollapsed || false;
 });
 
-interface Note {
-  id: string;
-  title: string;
-  content?: string; // 兼容旧数据，可选
-  filePath?: string; // 文件路径（新数据存储方式）
-  folderId?: string;
-  createdAt: number;
-  updatedAt: number;
-}
+import type { Note, Folder } from "./typings";
 
-interface Folder {
-  id: string;
-  name: string;
-  expanded: boolean;
-  notes: Note[];
-  subfolders?: Folder[];
+// 用于显示的笔记（包含从文件加载的内容）
+interface NoteWithContent extends Note {
+  content: string; // 从文件加载的内容
 }
 
 const folders = ref<Folder[]>([]);
@@ -98,20 +87,19 @@ const confirmDialog = ref({
   folderId: "",
 });
 
-const currentNote = computed(() => {
+const currentNote = computed<NoteWithContent | null>(() => {
   for (const folder of folders.value) {
     const note = findNoteInFolder(folder, currentNoteId.value);
     if (note) {
-      // 如果笔记有 filePath，从文件加载内容
-      if (note.filePath && !(window as any).myPluginAPI) {
-        console.warn('myPluginAPI 不可用');
-      } else if (note.filePath) {
-        // 动态加载笔记内容
-        const content = (window as any).myPluginAPI.loadNoteFromFile(note.filePath);
-        // 创建包含内容的新对象（不修改原对象）
-        return { ...note, content };
+      if (!(window as any).myPluginAPI) {
+        console.warn("myPluginAPI 不可用");
+        return { ...note, content: "" };
       }
-      return note;
+      // 从文件加载笔记内容
+      const content = (window as any).myPluginAPI.loadNoteFromFile(
+        note.filePath
+      );
+      return { ...note, content };
     }
   }
   return null;
@@ -224,24 +212,8 @@ console.log(greeting);
 async function saveData() {
   try {
     // 使用 toRaw 移除响应式代理，然后通过 JSON 深拷贝确保数据可以被序列化
-    // 注意：不保存 content 字段到 DB，只保存 filePath
     const rawData = JSON.parse(JSON.stringify(toRaw(folders.value)));
-    
-    // 清理 content 字段（只保留 filePath）
-    function cleanNotes(folders: Folder[]) {
-      for (const folder of folders) {
-        for (const note of folder.notes) {
-          if (note.filePath) {
-            delete note.content;
-          }
-        }
-        if (folder.subfolders) {
-          cleanNotes(folder.subfolders);
-        }
-      }
-    }
-    cleanNotes(rawData);
-    
+
     await window.naimo.db.put({
       _id: "notebook_data",
       folders: rawData,
@@ -259,7 +231,7 @@ async function createNote(folderId: string) {
   folder.expanded = true;
 
   const noteId = Date.now().toString();
-  
+
   // 保存空内容到文件
   const filePath = await (window as any).myPluginAPI.saveNoteToFile(noteId, "");
 
@@ -306,18 +278,23 @@ function selectNote(noteId: string) {
 async function updateNote(content: string, title: string) {
   if (!currentNote.value) return;
 
-  // 保存内容到文件
-  if (currentNote.value.filePath) {
-    await (window as any).myPluginAPI.saveNoteToFile(currentNote.value.id, content);
-  } else {
-    // 兼容旧数据：如果没有 filePath，创建一个
-    const filePath = await (window as any).myPluginAPI.saveNoteToFile(currentNote.value.id, content);
-    currentNote.value.filePath = filePath;
-    delete currentNote.value.content;
+  // 查找原始的 Note 对象
+  let originalNote: Note | null = null;
+  for (const folder of folders.value) {
+    const note = findNoteInFolder(folder, currentNote.value.id);
+    if (note) {
+      originalNote = note;
+      break;
+    }
   }
 
-  currentNote.value.title = title;
-  currentNote.value.updatedAt = Date.now();
+  if (!originalNote) return;
+
+  // 更新现有文件的内容（不创建新文件）
+  (window as any).myPluginAPI.updateNoteFile(originalNote.filePath, content);
+
+  originalNote.title = title;
+  originalNote.updatedAt = Date.now();
   await saveData();
 }
 
@@ -335,17 +312,17 @@ async function deleteNote(noteId: string) {
 
   if (!noteToDelete) return;
 
+  // 从文件加载内容以检查是否包含图片
+  const content =
+    (window as any).myPluginAPI?.loadNoteFromFile(noteToDelete.filePath) || "";
+
   // 检查是否包含图片
-  const hasImagesResult = await (window as any).myPluginAPI?.hasImages(
-    noteToDelete.content
-  );
+  const hasImagesResult = await (window as any).myPluginAPI?.hasImages(content);
 
   if (hasImagesResult) {
     // 提取图片路径
     const imagePaths =
-      (await (window as any).myPluginAPI?.extractImagePaths(
-        noteToDelete.content
-      )) || [];
+      (await (window as any).myPluginAPI?.extractImagePaths(content)) || [];
 
     confirmDialog.value = {
       show: true,
@@ -373,15 +350,16 @@ async function performDeleteNote(noteId: string) {
   }
 
   if (noteToDelete && (window as any).myPluginAPI) {
-    // 如果笔记使用文件存储，从文件加载内容
-    let content = noteToDelete.content || '';
-    if (noteToDelete.filePath) {
-      content = (window as any).myPluginAPI.loadNoteFromFile(noteToDelete.filePath);
-    }
+    // 从文件加载内容以检查是否有图片
+    const content = (window as any).myPluginAPI.loadNoteFromFile(
+      noteToDelete.filePath
+    );
 
     // 删除关联的图片文件
     if (content) {
-      const imagePaths = await (window as any).myPluginAPI.extractImagePaths(content);
+      const imagePaths = await (window as any).myPluginAPI.extractImagePaths(
+        content
+      );
       for (const imagePath of imagePaths) {
         try {
           (window as any).myPluginAPI.deleteImage(imagePath);
@@ -392,12 +370,10 @@ async function performDeleteNote(noteId: string) {
     }
 
     // 删除笔记文件
-    if (noteToDelete.filePath) {
-      try {
-        (window as any).myPluginAPI.deleteNoteFile(noteToDelete.filePath);
-      } catch (error) {
-        console.error("删除笔记文件失败:", error);
-      }
+    try {
+      (window as any).myPluginAPI.deleteNoteFile(noteToDelete.filePath);
+    } catch (error) {
+      console.error("删除笔记文件失败:", error);
     }
   }
 
@@ -478,10 +454,87 @@ function countFolderContent(folder: Folder): {
   return { noteCount, subfolderCount };
 }
 
+// 递归删除文件夹中所有笔记的文件和图片
+async function deleteFolderFiles(folder: Folder) {
+  if (!folder || !(window as any).myPluginAPI) return;
+
+  // 删除文件夹中的所有笔记文件和图片
+  for (const note of folder.notes) {
+    try {
+      // 从文件加载内容以检查是否有图片
+      const content = (window as any).myPluginAPI.loadNoteFromFile(
+        note.filePath
+      );
+
+      // 删除关联的图片文件
+      if (content) {
+        const imagePaths = await (window as any).myPluginAPI.extractImagePaths(
+          content
+        );
+        for (const imagePath of imagePaths) {
+          try {
+            (window as any).myPluginAPI.deleteImage(imagePath);
+            console.log("删除图片文件:", imagePath);
+          } catch (error) {
+            console.error("删除图片文件失败:", imagePath, error);
+          }
+        }
+      }
+
+      // 删除笔记文件
+      (window as any).myPluginAPI.deleteNoteFile(note.filePath);
+      console.log("删除笔记文件:", note.filePath);
+    } catch (error) {
+      console.error("删除笔记文件失败:", note.filePath, error);
+    }
+  }
+
+  // 递归删除子文件夹
+  if (folder.subfolders) {
+    for (const subfolder of folder.subfolders) {
+      await deleteFolderFiles(subfolder);
+    }
+  }
+}
+
+// 检查文件夹中是否包含指定笔记（递归）
+function folderContainsNote(folder: Folder, noteId: string): boolean {
+  if (folder.notes.some((n) => n.id === noteId)) {
+    return true;
+  }
+  if (folder.subfolders) {
+    for (const subfolder of folder.subfolders) {
+      if (folderContainsNote(subfolder, noteId)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 // 执行删除
-function deleteFolder(folderId: string) {
+async function deleteFolder(folderId: string) {
+  // 先查找文件夹
+  const folder = findFolder(folders.value, folderId);
+
+  // 如果当前选中的笔记在被删除的文件夹中，清除选中状态
+  if (
+    currentNoteId.value &&
+    folder &&
+    folderContainsNote(folder, currentNoteId.value)
+  ) {
+    currentNoteId.value = null;
+  }
+
+  // 删除文件夹中所有的笔记文件和图片
+  if (folder) {
+    await deleteFolderFiles(folder);
+  }
+
+  // 从数据结构中删除文件夹
   removeFolderFromAllFolders(folderId);
-  saveData();
+
+  await saveData();
 }
 
 // 确认删除

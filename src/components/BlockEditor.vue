@@ -9,18 +9,15 @@ import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 import Vditor from "vditor";
 import "vditor/dist/index.css";
 
-interface Note {
-  id: string;
-  title: string;
-  content: string; // BlockEditor 期望 content 必需（从文件加载后）
-  filePath?: string;
-  folderId?: string;
-  createdAt: number;
-  updatedAt: number;
+import type { Note } from "../typings";
+
+// BlockEditor 需要包含 content 的笔记
+interface NoteWithContent extends Note {
+  content: string;
 }
 
 const props = defineProps<{
-  note: Note;
+  note: NoteWithContent;
   isSidebarCollapsed?: boolean;
 }>();
 
@@ -34,8 +31,7 @@ let vditor: Vditor | null = null;
 let saveTimer: NodeJS.Timeout | null = null;
 let isSettingValue = false; // 标记是否正在设置初始值
 let resizeObserver: ResizeObserver | null = null;
-let currentToolbarMode = ""; // 当前工具栏模式
-let resizeTimer: NodeJS.Timeout | null = null; // 防抖定时器
+let resizeTimer: NodeJS.Timeout | null = null;
 
 // 创建自定义侧边栏切换按钮
 function createSidebarToggleButton() {
@@ -59,95 +55,171 @@ function createSidebarToggleButton() {
   };
 }
 
-// 定义不同宽度下的工具栏配置
-const toolbarConfigs = {
+// 更新侧边栏切换按钮的图标和提示文本
+function updateSidebarToggleButton() {
+  if (!vditor || !vditorRef.value) return;
+
+  // 找到工具栏中的侧边栏切换按钮
+  const toolbarElement = vditorRef.value.querySelector(".vditor-toolbar");
+  if (!toolbarElement) return;
+
+  const sidebarToggleBtn = toolbarElement.querySelector(
+    ".sidebar-toggle-btn button"
+  );
+  if (!sidebarToggleBtn) return;
+
+  // 更新图标
+  const newIcon = props.isSidebarCollapsed
+    ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+         <rect x="3" y="3" width="7" height="18" rx="1" stroke-width="2" />
+         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12h5m-2-2l2 2-2 2" />
+       </svg>`
+    : `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+         <rect x="3" y="3" width="7" height="18" rx="1" stroke-width="2" />
+         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12h-5m2-2l-2 2 2 2" />
+       </svg>`;
+
+  sidebarToggleBtn.innerHTML = newIcon;
+
+  // 更新提示文本（aria-label）
+  const newTip = props.isSidebarCollapsed ? "展开侧边栏" : "隐藏侧边栏";
+  const parentItem = sidebarToggleBtn.closest(".vditor-toolbar__item");
+  if (parentItem) {
+    parentItem.setAttribute("aria-label", newTip);
+    parentItem.setAttribute("data-tip", newTip);
+  }
+}
+
+// 工具栏配置
+const toolbarConfig = [
+  "emoji",
+  "headings",
+  "bold",
+  "italic",
+  "strike",
+  "|",
+  "line",
+  "quote",
+  "list",
+  "ordered-list",
+  "check",
+  "|",
+  "code",
+  "inline-code",
+  "link",
+  "table",
+  "|",
+  "undo",
+  "redo",
+  "|",
+  "edit-mode",
+  "outline",
+  createSidebarToggleButton(),
+];
+
+// 不同宽度下显示的按钮（data-type）
+const toolbarVisibilityByWidth = {
+  minimal: ["bold", "italic", "list", "link", "undo", "redo"], // < 400px
+  compact: [
+    "headings",
+    "bold",
+    "italic",
+    "list",
+    "ordered-list",
+    "code",
+    "link",
+    "undo",
+    "redo",
+  ], // 400-600px
+  medium: [
+    "headings",
+    "bold",
+    "italic",
+    "strike",
+    "list",
+    "ordered-list",
+    "check",
+    "code",
+    "link",
+    "table",
+    "undo",
+    "redo",
+  ], // 600-800px
   full: [
     "emoji",
     "headings",
     "bold",
     "italic",
     "strike",
-    "|",
     "line",
     "quote",
     "list",
     "ordered-list",
     "check",
-    "|",
     "code",
     "inline-code",
     "link",
     "table",
-    "|",
     "undo",
     "redo",
-    "|",
     "edit-mode",
     "outline",
-    "preview",
-    "|",
-    createSidebarToggleButton(),
-  ],
-  medium: [
-    "headings",
-    "bold",
-    "italic",
-    "strike",
-    "|",
-    "list",
-    "ordered-list",
-    "check",
-    "|",
-    "code",
-    "link",
-    "table",
-    "|",
-    "undo",
-    "redo",
-    "|",
-    "preview",
-    "|",
-    createSidebarToggleButton(),
-  ],
-  compact: [
-    "headings",
-    "bold",
-    "italic",
-    "|",
-    "list",
-    "ordered-list",
-    "|",
-    "code",
-    "link",
-    "|",
-    "undo",
-    "redo",
-    "|",
-    "preview",
-    "|",
-    createSidebarToggleButton(),
-  ],
-  minimal: [
-    "bold",
-    "italic",
-    "|",
-    "list",
-    "|",
-    "link",
-    "|",
-    "undo",
-    "redo",
-    "|",
-    createSidebarToggleButton(),
-  ],
+  ], // >= 800px
 };
 
-// 根据宽度获取工具栏配置
-function getToolbarByWidth(width: number): string {
+// 根据宽度获取工具栏模式
+function getToolbarMode(width: number): keyof typeof toolbarVisibilityByWidth {
   if (width >= 800) return "full";
   if (width >= 600) return "medium";
   if (width >= 400) return "compact";
   return "minimal";
+}
+
+// 动态更新工具栏按钮显示/隐藏
+function updateToolbarVisibility(mode: keyof typeof toolbarVisibilityByWidth) {
+  if (!vditorRef.value) return;
+
+  const toolbar = vditorRef.value.querySelector(".vditor-toolbar");
+  if (!toolbar) return;
+
+  const visibleButtons = new Set(toolbarVisibilityByWidth[mode]);
+
+  // 遍历所有工具栏按钮
+  const items = toolbar.querySelectorAll(".vditor-toolbar__item");
+  items.forEach((item) => {
+    const button = item.querySelector("button[data-type]");
+    if (button) {
+      const dataType = button.getAttribute("data-type");
+
+      // sidebar-toggle 按钮始终显示
+      if (dataType === "sidebar-toggle") {
+        (item as HTMLElement).style.display = "";
+        return;
+      }
+
+      // 根据模式显示或隐藏
+      if (dataType && visibleButtons.has(dataType)) {
+        (item as HTMLElement).style.display = "";
+      } else {
+        (item as HTMLElement).style.display = "none";
+      }
+    }
+  });
+
+  // 处理分隔符 - 隐藏相邻的或开头/结尾的分隔符
+  const dividers = toolbar.querySelectorAll(".vditor-toolbar__divider");
+  dividers.forEach((divider, index) => {
+    // 简单策略：在较小宽度时隐藏部分分隔符
+    if (mode === "minimal" || mode === "compact") {
+      if (index > 1) {
+        (divider as HTMLElement).style.display = "none";
+      } else {
+        (divider as HTMLElement).style.display = "";
+      }
+    } else {
+      (divider as HTMLElement).style.display = "";
+    }
+  });
 }
 
 // 将文件转为 base64
@@ -187,8 +259,14 @@ async function convertLocalImagesToBase64() {
   for (const img of Array.from(images)) {
     const src = img.getAttribute("src");
 
-    // 只处理本地路径（包含 notebook_images 的路径）且还没有转换过的图片
-    if (src && src.includes("notebook_images") && !src.startsWith("data:")) {
+    // 只处理本地路径（包含 images 或 notebook 的路径）且还没有转换过的图片
+    if (
+      src &&
+      (src.includes("\\images\\") ||
+        src.includes("/images/") ||
+        src.includes("notebook")) &&
+      !src.startsWith("data:")
+    ) {
       // 检查是否已经有转换后的 base64（通过 data-original-path 判断）
       const originalPath = img.getAttribute("data-original-path");
       if (originalPath === src) {
@@ -268,7 +346,9 @@ function setupImageObserver(): MutationObserver | null {
           // 如果 src 被改回本地路径，需要重新转换
           if (
             src &&
-            src.includes("notebook_images") &&
+            (src.includes("\\images\\") ||
+              src.includes("/images/") ||
+              src.includes("notebook")) &&
             !src.startsWith("data:")
           ) {
             hasNewImages = true;
@@ -342,30 +422,11 @@ function saveContent(content: string) {
 }
 
 // 初始化 Vditor
-function initVditor(toolbarMode?: string) {
+function initVditor() {
   if (!vditorRef.value) return;
 
-  // 获取当前内容（如果正在重新初始化）
-  const currentContent = vditor?.getValue() || props.note.content || "";
-
-  // 如果没有指定工具栏模式，根据当前宽度决定
-  if (!toolbarMode) {
-    const width = vditorRef.value.offsetWidth;
-    toolbarMode = getToolbarByWidth(width);
-  }
-
-  // 如果工具栏模式没变，不需要重新初始化
-  if (vditor && toolbarMode === currentToolbarMode) {
-    return;
-  }
-
-  currentToolbarMode = toolbarMode;
-
-  // 销毁旧的实例
-  if (vditor) {
-    vditor.destroy();
-    vditor = null;
-  }
+  // 如果已经初始化过，不重复初始化
+  if (vditor) return;
 
   vditor = new Vditor(vditorRef.value, {
     height: "100%",
@@ -380,7 +441,7 @@ function initVditor(toolbarMode?: string) {
     hint: {
       emojiPath: "https://cdn.jsdelivr.net/npm/vditor@3.10.7/dist/images/emoji",
     },
-    toolbar: toolbarConfigs[toolbarMode as keyof typeof toolbarConfigs],
+    toolbar: toolbarConfig,
     counter: {
       enable: true,
       type: "markdown",
@@ -425,7 +486,7 @@ function initVditor(toolbarMode?: string) {
     after: () => {
       // 编辑器初始化完成后设置内容
       isSettingValue = true;
-      vditor?.setValue(currentContent);
+      vditor?.setValue(props.note.content || "");
       // 延迟重置标记，确保初始值设置完成
       setTimeout(() => {
         isSettingValue = false;
@@ -455,7 +516,7 @@ function setupResizeObserver() {
   if (!vditorRef.value) return;
 
   resizeObserver = new ResizeObserver((entries) => {
-    // 防抖处理，避免频繁重新初始化
+    // 防抖处理
     if (resizeTimer) {
       clearTimeout(resizeTimer);
     }
@@ -463,14 +524,10 @@ function setupResizeObserver() {
     resizeTimer = setTimeout(() => {
       for (const entry of entries) {
         const width = entry.contentRect.width;
-        const newToolbarMode = getToolbarByWidth(width);
-
-        // 如果工具栏模式改变，重新初始化
-        if (newToolbarMode !== currentToolbarMode) {
-          initVditor(newToolbarMode);
-        }
+        const mode = getToolbarMode(width);
+        updateToolbarVisibility(mode);
       }
-    }, 300); // 300ms 防抖延迟
+    }, 100); // 100ms 防抖
   });
 
   resizeObserver.observe(vditorRef.value);
@@ -508,19 +565,24 @@ watch(
 watch(
   () => props.isSidebarCollapsed,
   () => {
-    // 侧边栏状态改变时，重新初始化编辑器以更新按钮图标和提示
-    if (vditor) {
-      initVditor(currentToolbarMode);
-    }
+    // 侧边栏状态改变时，只更新工具栏按钮
+    updateSidebarToggleButton();
   }
 );
 
 onMounted(() => {
   initVditor();
+  // 设置 ResizeObserver
   setupResizeObserver();
   // 设置图片监听器，延迟以确保 Vditor 已初始化
   setTimeout(() => {
     imageObserver = setupImageObserver();
+    // 初始化后立即更新一次工具栏
+    if (vditorRef.value) {
+      const width = vditorRef.value.offsetWidth;
+      const mode = getToolbarMode(width);
+      updateToolbarVisibility(mode);
+    }
   }, 1000);
 });
 
@@ -535,13 +597,13 @@ onBeforeUnmount(() => {
     imageObserver.disconnect();
     imageObserver = null;
   }
-  if (vditor) {
-    vditor.destroy();
-    vditor = null;
-  }
   if (resizeObserver) {
     resizeObserver.disconnect();
     resizeObserver = null;
+  }
+  if (vditor) {
+    vditor.destroy();
+    vditor = null;
   }
 });
 </script>
@@ -569,7 +631,7 @@ onBeforeUnmount(() => {
   background-color: #fafafa;
   border-bottom: 1px solid #e5e7eb;
   padding: 4px 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* 不换行，通过隐藏按钮实现响应式 */
   min-height: auto;
 }
 
@@ -655,6 +717,32 @@ onBeforeUnmount(() => {
   background: transparent !important;
 }
 
+/* 预览模式下的列表样式 */
+:deep(.vditor-ir__preview ul) {
+  padding-left: 28px;
+  list-style-type: disc;
+  list-style-position: outside;
+}
+
+:deep(.vditor-ir__preview ol) {
+  padding-left: 28px;
+  list-style-type: decimal;
+  list-style-position: outside;
+}
+
+:deep(.vditor-ir__preview li) {
+  margin: 4px 0;
+  display: list-item;
+}
+
+:deep(.vditor-ir__preview ul ul) {
+  list-style-type: circle;
+}
+
+:deep(.vditor-ir__preview ul ul ul) {
+  list-style-type: square;
+}
+
 /* 代码块样式 - 只增强背景色，保留原始的 padding 和其他样式 */
 :deep(.vditor-ir__marker--pre) {
   background: #f6f8fa !important;
@@ -687,13 +775,44 @@ onBeforeUnmount(() => {
 }
 
 /* 列表样式 */
-:deep(.vditor-ir pre.vditor-reset ul),
+:deep(.vditor-ir pre.vditor-reset ul) {
+  padding-left: 28px;
+  list-style-type: disc;
+  list-style-position: outside;
+}
+
 :deep(.vditor-ir pre.vditor-reset ol) {
-  padding-left: 24px;
+  padding-left: 28px;
+  list-style-type: decimal;
+  list-style-position: outside;
 }
 
 :deep(.vditor-ir pre.vditor-reset li) {
   margin: 4px 0;
+  display: list-item;
+}
+
+/* 嵌套列表样式 */
+:deep(.vditor-ir pre.vditor-reset ul ul) {
+  list-style-type: circle;
+}
+
+:deep(.vditor-ir pre.vditor-reset ul ul ul) {
+  list-style-type: square;
+}
+
+/* 任务列表样式（checkbox） */
+:deep(.vditor-ir pre.vditor-reset li[data-type="task-list-item"]) {
+  list-style-type: none;
+}
+
+:deep(
+    .vditor-ir
+      pre.vditor-reset
+      li[data-type="task-list-item"]
+      input[type="checkbox"]
+  ) {
+  margin-right: 8px;
 }
 
 /* 滚动条样式 */

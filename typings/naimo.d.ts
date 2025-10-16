@@ -858,6 +858,8 @@ export interface MyPluginAPI {
 	formatText: (text: string) => string;
 	/** 获取数据 */
 	fetchData: (url: string) => Promise<any>;
+	/** 获取笔记应用根目录 */
+	getNotebookRootDir: () => Promise<string>;
 	/** 保存 base64 图片到本地 */
 	saveImageFromBase64: (base64Data: string) => Promise<string>;
 	/** 从内容中提取所有图片路径 */
@@ -866,12 +868,14 @@ export interface MyPluginAPI {
 	deleteImage: (imagePath: string) => boolean;
 	/** 检查内容中是否包含图片 */
 	hasImages: (content: string) => Promise<boolean>;
-	/** 获取剪贴板图片目录 */
+	/** 获取图片目录 */
 	getClipboardImagesDir: () => Promise<string>;
 	/** 获取笔记存储目录 */
 	getNotesStorageDir: () => Promise<string>;
-	/** 保存笔记内容到文件 */
+	/** 创建新笔记文件 */
 	saveNoteToFile: (noteId: string, content: string) => Promise<string>;
+	/** 更新现有笔记文件内容 */
+	updateNoteFile: (filePath: string, content: string) => void;
 	/** 从文件加载笔记内容 */
 	loadNoteFromFile: (filePath: string) => string;
 	/** 删除笔记文件 */
