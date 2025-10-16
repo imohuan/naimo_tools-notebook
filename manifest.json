@@ -1,0 +1,31 @@
+{
+  "$schema": "./schema.json",
+  "id": "notebook",
+  "name": "记事本",
+  "version": "1.0.0",
+  "author": "Naimo",
+  "icon": "./ico.png",
+  "description": "支持 Markdown 语法的智能记事本，即时预览，代码高亮",
+  "category": "efficient_office",
+  "enabled": true,
+  "main": "./index.html",
+  "preload": "./preload.js",
+  "feature": [
+    {
+      "path": "notebook",
+      "name": "记事本",
+      "icon": "./ico.png",
+      "description": "打开记事本，支持 Markdown 和代码高亮",
+      "type": "text"
+    },
+    {
+      "path": "quick-note",
+      "name": "小记",
+      "icon": "./ico.png",
+      "description": "快速记录文字或文件内容到小记",
+      "type": "regex",
+      "match": ".+",
+      "minLength": 10
+    }
+  ]
+}
