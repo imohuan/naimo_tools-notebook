@@ -252,6 +252,8 @@ async function convertLocalImagesToBase64() {
     return;
   }
 
+  // await new Promise((resolve) => setTimeout(resolve, 10000));
+
   // 查找所有图片元素
   const images = editorElement.querySelectorAll("img");
   console.log("convertLocalImagesToBase64: 找到", images.length, "个图片元素");
@@ -294,13 +296,19 @@ async function convertLocalImagesToBase64() {
           console.log("图片转换成功，更新显示");
           // 只更新显示，不修改编辑器内容
           img.src = fullBase64;
+          // 添加已加载标记，CSS会根据这个class显示正常状态
+          img.classList.add("local-image-loaded");
           // 添加标记，表示这是转换后的图片，避免重复转换
           img.setAttribute("data-original-path", src);
         } else {
           console.log("图片转换失败，返回空:", src);
+          // 转换失败，显示错误状态
+          img.classList.add("local-image-error");
         }
       } catch (error) {
         console.error("转换本地图片失败:", src, error);
+        // 转换失败，显示错误状态
+        img.classList.add("local-image-error");
       }
     }
   }
@@ -891,5 +899,68 @@ onBeforeUnmount(() => {
 :deep(.vditor-toolbar__item.sidebar-toggle-btn svg) {
   width: 14px;
   height: 14px;
+}
+
+/* 本地图片默认加载状态 */
+:deep(.vditor-ir img) {
+  width: 100%;
+  height: 50px;
+  object-fit: cover;
+  position: relative;
+}
+
+/* 加载完成后的图片正常显示 */
+:deep(.vditor-ir img.local-image-loaded) {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  opacity: 1;
+  animation: fade-in 0.3s ease-in;
+}
+
+/* 加载失败状态 */
+:deep(.vditor-ir img.local-image-error) {
+  width: 100%;
+  height: 50px;
+  background: #fee;
+  border: 2px dashed #f88;
+  border-radius: 4px;
+  opacity: 1;
+}
+
+:deep(.vditor-ir img:not(.local-image-loaded):not(.local-image-error)::after) {
+  content: "图片加载中...";
+  position: absolute;
+  left: -5px;
+  top: -5px;
+  right: -5px;
+  bottom: -5px;
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: loading-shimmer 1.5s infinite;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #999;
+}
+
+@keyframes loading-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 </style>
