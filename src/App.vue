@@ -77,6 +77,7 @@ interface NoteWithContent extends Note {
 
 const folders = ref<Folder[]>([]);
 const currentNoteId = ref<string | null>(null);
+const isDataLoaded = ref(false); // 标记数据是否已加载
 
 // 确认对话框状态
 const confirmDialog = ref({
@@ -123,10 +124,13 @@ function findNoteInFolder(folder: Folder, noteId: string | null): Note | null {
 
 async function loadData() {
   try {
+    console.log(">>> loadData 开始加载...");
     const data = await window.naimo.db.get("notebook_data");
     if (data && data.folders) {
       folders.value = data.folders;
+      console.log(">>> loadData 加载完成，文件夹数:", folders.value.length);
     } else {
+      console.log(">>> loadData 首次运行，创建默认数据");
       // 创建默认结构
       const welcomeNoteId = Date.now().toString();
       const welcomeContent = `# 欢迎使用笔记本
@@ -204,22 +208,70 @@ console.log(greeting);
       ];
       await saveData();
     }
+    isDataLoaded.value = true;
+    console.log(">>> loadData 完成，isDataLoaded =", isDataLoaded.value);
   } catch (error) {
     console.error("加载数据失败:", error);
+    isDataLoaded.value = true; // 即使失败也标记为已加载，避免永久等待
   }
 }
 
 async function saveData() {
   try {
+    console.log(">>> saveData 开始");
+    console.log(">>> folders.value 数量:", folders.value.length);
+
     // 使用 toRaw 移除响应式代理，然后通过 JSON 深拷贝确保数据可以被序列化
     const rawData = JSON.parse(JSON.stringify(toRaw(folders.value)));
+    console.log(">>> 序列化后的 folders 数量:", rawData.length);
 
-    await window.naimo.db.put({
-      _id: "notebook_data",
-      folders: rawData,
-    });
+    // 查找小记文件夹
+    const quickNotesFolder = rawData.find((f: any) => f.name === "小记");
+    if (quickNotesFolder) {
+      console.log(">>> 小记文件夹找到，笔记数:", quickNotesFolder.notes.length);
+      console.log(
+        ">>> 小记文件夹内容:",
+        JSON.stringify(quickNotesFolder, null, 2)
+      );
+    } else {
+      console.log(">>> 小记文件夹未找到");
+    }
+
+    // 先尝试获取现有文档以获取 _rev
+    let doc: any = { _id: "notebook_data" };
+    try {
+      const existingDoc = await window.naimo.db.get("notebook_data");
+      if (existingDoc) {
+        doc._rev = existingDoc._rev;
+        console.log(">>> 现有文档 _rev:", doc._rev);
+      }
+    } catch (err) {
+      // 文档不存在，这是第一次保存，不需要 _rev
+      console.log(">>> 首次保存数据，无 _rev");
+    }
+
+    // 保存数据
+    doc.folders = rawData;
+    console.log(
+      ">>> 准备调用 db.put，文档内容:",
+      JSON.stringify(doc, null, 2).substring(0, 500)
+    );
+    const result = await window.naimo.db.put(doc);
+    console.log(">>> 数据库保存成功，结果:", result);
+
+    // 验证保存结果
+    const verifyDoc = await window.naimo.db.get("notebook_data");
+    if (verifyDoc && verifyDoc.folders) {
+      const verifyQuickNotes = verifyDoc.folders.find(
+        (f: any) => f.name === "小记"
+      );
+      console.log(
+        ">>> 验证：数据库中小记文件夹笔记数:",
+        verifyQuickNotes?.notes.length || 0
+      );
+    }
   } catch (error) {
-    console.error("保存数据失败:", error);
+    console.error(">>> 保存数据失败:", error);
   }
 }
 
@@ -533,6 +585,18 @@ async function deleteFolder(folderId: string) {
 
   // 从数据结构中删除文件夹
   removeFolderFromAllFolders(folderId);
+
+  // 检查是否还有文件夹，如果没有则创建一个新的默认文件夹
+  if (folders.value.length === 0) {
+    const newFolder: Folder = {
+      id: Date.now().toString(),
+      name: "我的笔记",
+      expanded: true,
+      notes: [],
+      subfolders: [],
+    };
+    folders.value.push(newFolder);
+  }
 
   await saveData();
 }
@@ -898,6 +962,9 @@ function findOrCreateQuickNotesFolder(): Folder {
       subfolders: [],
     };
     folders.value.push(quickNotesFolder);
+  } else {
+    // 如果已存在，确保它是展开的
+    quickNotesFolder.expanded = true;
   }
 
   return quickNotesFolder;
@@ -935,26 +1002,50 @@ function setupOnEnterHandler() {
           content = params.searchText;
         }
 
-        // 3. 如果都没有内容，提示用户
+        // 3. 如果都没有内容，直接返回
         if (!content || content.trim() === "") {
-          await window.naimo.system.notify("请输入内容或拖入文件", "提示");
+          console.log("小记内容为空，已忽略");
           return;
         }
 
         // 4. 保存到"小记"文件夹
         try {
+          console.log("=== 开始创建小记 ===");
+
+          // 等待数据加载完成
+          if (!isDataLoaded.value) {
+            console.log("等待数据加载完成...");
+            let waitCount = 0;
+            while (!isDataLoaded.value && waitCount < 50) {
+              await new Promise((resolve) => setTimeout(resolve, 100));
+              waitCount++;
+            }
+            if (!isDataLoaded.value) {
+              console.error("数据加载超时");
+              return;
+            }
+            console.log("数据加载完成，继续创建小记");
+          }
+
+          console.log("当前 folders 数量:", folders.value.length);
+
           // 查找或创建"小记"文件夹
           const quickNotesFolder = findOrCreateQuickNotesFolder();
+          console.log("小记文件夹 ID:", quickNotesFolder.id);
+          console.log("小记文件夹现有笔记数:", quickNotesFolder.notes.length);
 
           // 生成时间戳标题
           const title = generateTimeTitle();
           const noteId = Date.now().toString();
+          console.log("新笔记标题:", title);
+          console.log("新笔记 ID:", noteId);
 
           // 保存内容到文件
           const filePath = await (window as any).myPluginAPI.saveNoteToFile(
             noteId,
             content
           );
+          console.log("文件保存路径:", filePath);
 
           // 创建新笔记
           const newNote: Note = {
@@ -968,22 +1059,30 @@ function setupOnEnterHandler() {
 
           // 添加到文件夹（添加到开头）
           quickNotesFolder.notes.unshift(newNote);
+          console.log(
+            "笔记已添加到文件夹，当前笔记数:",
+            quickNotesFolder.notes.length
+          );
+          console.log(
+            "folders.value 引用检查:",
+            folders.value.find((f) => f.id === quickNotesFolder.id)?.notes
+              .length
+          );
 
-          // 展开"小记"文件夹
-          quickNotesFolder.expanded = true;
-
-          // 保存数据到数据库
+          // 先保存数据到数据库
+          console.log("准备保存到数据库...");
           await saveData();
+          console.log("saveData 调用完成");
 
-          // 选中新创建的笔记
+          // 使用 nextTick 确保 DOM 更新后再选中笔记
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          // 选中新创建的笔记进行预览
           currentNoteId.value = newNote.id;
 
-          // 提示用户
-          await window.naimo.system.notify(`小记已保存：${title}`, "成功");
-          console.log("小记保存成功:", title);
+          console.log("=== 小记创建流程完成 ===", title);
         } catch (error) {
           console.error("保存小记失败:", error);
-          await window.naimo.system.notify("保存小记失败", "错误");
         }
       }
     } catch (error) {
@@ -993,9 +1092,11 @@ function setupOnEnterHandler() {
 }
 
 onMounted(() => {
-  loadData();
+  // 先设置事件监听器
   document.addEventListener("keydown", handleKeyDown);
   setupOnEnterHandler();
+  // 然后加载数据（异步进行）
+  loadData();
 });
 
 onUnmounted(() => {

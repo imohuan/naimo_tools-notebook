@@ -38,7 +38,7 @@ function createSidebarToggleButton() {
   return {
     name: "sidebar-toggle",
     tipPosition: "s",
-    tip: props.isSidebarCollapsed ? "展开侧边栏" : "隐藏侧边栏",
+    tip: "切换侧边栏",
     className: "sidebar-toggle-btn",
     icon: props.isSidebarCollapsed
       ? `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -82,7 +82,7 @@ function updateSidebarToggleButton() {
   sidebarToggleBtn.innerHTML = newIcon;
 
   // 更新提示文本（aria-label）
-  const newTip = props.isSidebarCollapsed ? "展开侧边栏" : "隐藏侧边栏";
+  const newTip = "切换侧边栏";
   const parentItem = sidebarToggleBtn.closest(".vditor-toolbar__item");
   if (parentItem) {
     parentItem.setAttribute("aria-label", newTip);

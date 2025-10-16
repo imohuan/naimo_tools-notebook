@@ -2,7 +2,7 @@
   "$schema": "./schema.json",
   "id": "notebook",
   "name": "记事本",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Naimo",
   "icon": "./ico.png",
   "description": "支持 Markdown 语法的智能记事本，即时预览，代码高亮",
